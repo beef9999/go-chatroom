@@ -130,7 +130,7 @@ func (server *ChatServer) GetRoom(name string) *Room {
             Name: name,
             lock: new(sync.RWMutex),
             Clients: make(map[string]*Client),
-            In: make(chan *Message),
+            In: make(chan *Message, 100),
         }
         go room.Dispatcher()
         server.Rooms[name] = room
