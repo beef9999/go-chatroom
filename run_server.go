@@ -8,6 +8,7 @@ import (
 
 func main() {
     debug := flag.Bool("debug", false, "Show debug info")
+    flag.Parse()
     if *debug {
         logging.SetLevel(logging.DEBUG, "chatroom")
     } else {
