@@ -3,12 +3,13 @@ import (
     "sync"
     "net"
     "time"
-    "log"
     "bufio"
     "fmt"
     "strings"
+    "github.com/op/go-logging"
 )
 
+var log = logging.MustGetLogger("chatroom")
 
 // ---------- MESSAGE --------------
 
@@ -42,9 +43,9 @@ type Room struct {
 
 // 给每个新产生的房间都分配一个goroutine loop，接收room.In的消息，根据room里登记的Clients信息，向每个client.In广播消息
 func (room *Room) Dispatcher() {
-    log.Printf("Chatroom: %s opened\n", room.Name)
+    log.Debug("Chatroom: %s opened\n", room.Name)
     for msg := range room.In {
-        //log.Printf("Room got message: room[%v], command[%v], content[%v]", msg.Receiver, msg.Command, msg.Content)
+        log.Debugf("Room got message: room[%v], command[%v], content[%v]", msg.Receiver, msg.Command, msg.Content)
         switch msg.Command {
         case QUIT:
             room.lock.Lock()
@@ -52,7 +53,7 @@ func (room *Room) Dispatcher() {
             room.lock.Unlock()
             room.broadcast(msg)
         case JOIN:
-            //log.Printf("%s joined\n", msg.Sender.Name)
+            log.Debugf("%s joined\n", msg.Sender.Name)
             room.lock.Lock()
             room.Clients[msg.Sender.Name] = msg.Sender
             room.lock.Unlock()
@@ -86,14 +87,14 @@ func NewChatServer(bindTo string, rooms map[string]*Room, lock *sync.RWMutex) *C
 func (server *ChatServer) ListenAndServe() {
     listener, err := net.Listen("tcp", server.BindTo)
     if err != nil {
-        log.Fatalln(err)
+        log.Fatal(err)
     }
     defer listener.Close()
 
     for {
         conn, err := listener.Accept()
         if err != nil {
-            log.Fatalln("Accept error:", err.Error())
+            log.Fatal("Accept error:", err.Error())
             time.Sleep(time.Second)
             continue
         }
@@ -186,10 +187,10 @@ func (client *Client) Response() {
     isCriticalError := func(err error) bool {
         ne, ok := err.(net.Error)
         if ok && (ne.Temporary() || ne.Timeout()) {
-            //log.Println("Temporary error at response:", err, "will not closed")
+            log.Debug("Temporary error at response:", err, "will not closed")
             return false
         } else {
-            log.Println("Network error, closed", err)
+            log.Debug("Network error, closed", err)
             return true
         }
 
@@ -267,10 +268,10 @@ func (client *Client) Receive() {
     }
 
     if err := scanner.Err(); err != nil {           // other network error
-        log.Println(client.Conn.RemoteAddr(), "Error:", err)
+        log.Debug(client.Conn.RemoteAddr(), "Error:", err)
         msg = &Message{client, "", QUIT, fmt.Sprintf("%s CONNECTION ERROR", client.Name), time.Now()}
     } else {                                        // EOF error
-        log.Println(client.Name, " Remote Closed")
+        log.Debug(client.Name, " Remote Closed")
         msg = &Message{client, "", QUIT, fmt.Sprintf("%s DISCONNECT", client.Name), time.Now()}
     }
     client.Out <- msg
