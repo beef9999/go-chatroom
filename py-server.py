@@ -38,7 +38,7 @@ class Room(threading.Thread):
         self.server = server
         self.name = name
         self.clients = {}
-        #self.lock = threading.RLock()
+        self.lock = threading.RLock()
         self.queue = queue.Queue()   # message queue
 
     def run(self):
@@ -47,14 +47,16 @@ class Room(threading.Thread):
             self.broadcast(msg)
 
     def receive(self, msg):
+        self.lock.acquire()
         if msg.sender.name not in self.clients:
             self.clients[msg.sender.name] = msg.sender
-
+        self.lock.release()
         self.queue.put(msg)
         
     def broadcast(self, msg):
-        for _, client in self.clients.items():
-            tornado.ioloop.IOLoop.instance().add_callback(ChatServer.response, msg, client)
+        with self.lock:
+            for _, client in self.clients.items():
+                tornado.ioloop.IOLoop.instance().add_callback(ChatServer.response, msg, client)
 
 
 class Client(object):
