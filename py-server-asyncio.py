@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-import tornado
-import tornado.tcpserver
-from tornado.ioloop import IOLoop, PeriodicCallback
 import argparse
-#from tornado.gen import coroutine
-#from tornado.queues import Queue
 import datetime
 import threading
 import logging
@@ -19,7 +14,7 @@ COMMAND_DISMISS = 4
 COMMAND_PAUSE = 5
 COMMAND_KICK = 6
 
-QUEUE_SIZE = 100
+QUEUE_SIZE = 1000
 
 Args = None
 
@@ -195,12 +190,19 @@ if __name__ == '__main__':
         logger.setLevel(logging.DEBUG)
     else:
         logger.setLevel(logging.INFO)
+    logger = logging.getLogger('asyncio')
+    if Args.debug:
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.ERROR)
 
     srv = ChatServer('localhost', 12345)
 
     try:
         srv.run()
     except KeyboardInterrupt:
+        pass
+    except Exception:
         pass
 
     srv.stop()
