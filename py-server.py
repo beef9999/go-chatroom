@@ -1,16 +1,15 @@
-
+#!/usr/bin/env python3
 import tornado
 import tornado.tcpserver
-import tornado.ioloop
-
+from tornado.ioloop import IOLoop, PeriodicCallback
+import argparse
 from tornado.gen import coroutine
-
-
-
+from tornado.queues import Queue
 import datetime
 import threading
-import queue
+import logging
 
+import asyncio
 
 
 COMMAND_NORMAL = 1
@@ -20,43 +19,56 @@ COMMAND_DISMISS = 4
 COMMAND_PAUSE = 5
 COMMAND_KICK = 6
 
+QUEUE_SIZE = 10
+
+Args = None
+
+SPEED = 0
+
+
+def show_speed():
+    global SPEED
+    logging.info(SPEED)
+    SPEED = 0
+
 
 class Message(object):
 
     def __init__(self, sender, receiver, command, content, time=None):
-        self.sender = sender    # client
+        self.sender = sender        # client
         self.receiver = receiver    # room name
         self.command = command
         self.content = content
         self.time = datetime.datetime.now() if time is None else time
 
 
-class Room(threading.Thread):
+class Room(object):
 
     def __init__(self, server, name):
-        super(Room, self).__init__()
         self.server = server
         self.name = name
         self.clients = {}
         self.lock = threading.RLock()
-        self.queue = queue.Queue()   # message queue
+        self.inqueue = Queue(maxsize=QUEUE_SIZE)
 
-    def run(self):
+    @coroutine
+    def dispatch(self):
+        logging.debug('Chatroom: %s opened' % self.name)
         while True:
-            msg = self.queue.get()
-            self.broadcast(msg)
+            msg = yield self.inqueue.get()
+            logging.debug("Room got message: room[%s], command[%s], content[%s]",
+                          msg.receiver, msg.command, msg.content)
+            if msg.command == COMMAND_JOIN:
+                logging.debug("%s joined", msg.sender.name)
+                self.clients[msg.sender.name] = msg.sender
+            elif msg.command == COMMAND_QUIT:
+                del self.clients[msg.sender.name]
+            yield self.broadcast(msg)
 
-    def receive(self, msg):
-        self.lock.acquire()
-        if msg.sender.name not in self.clients:
-            self.clients[msg.sender.name] = msg.sender
-        self.lock.release()
-        self.queue.put(msg)
-        
+    @coroutine
     def broadcast(self, msg):
-        with self.lock:
-            for _, client in self.clients.items():
-                tornado.ioloop.IOLoop.instance().add_callback(ChatServer.response, msg, client)
+        for _, client in self.clients.items():
+            yield client.inqueue.put(msg)
 
 
 class Client(object):
@@ -66,18 +78,65 @@ class Client(object):
         self.name = name
         self.rooms = {}
         self.stream = stream
+        self.inqueue = Queue(maxsize=QUEUE_SIZE)
+        self.outqueue = Queue(maxsize=QUEUE_SIZE)
 
-    # def process(self, line):
-    #     data = line.strip().split(' ')
-    #     if len(data) != 2:
-    #         return
-    #     room_name, content = data[0], data[1]
-    #     if room_name in self.rooms:
-    #         msg = Message(self, room_name, COMMAND_NORMAL, content)
-    #     else:
-    #         msg = Message(self, room_name, COMMAND_JOIN, content)
-    #     msg = Message(self, room_name, COMMAND_NORMAL, content)
-    #     return msg
+    @coroutine
+    def forwarding(self):
+        while True:
+            msg = yield self.outqueue.get()
+            if msg.command == COMMAND_QUIT:
+                for _, room in self.rooms.items():
+                    yield room.inqueue.put(msg)
+            elif msg.command == COMMAND_JOIN:
+                room_name = msg.receiver
+                room = self.server.get_room(room_name)
+                self.rooms[room_name] = room
+                yield room.inqueue.put(msg)
+            else:
+                room = self.rooms[msg.receiver]
+                yield room.inqueue.put(msg)
+            self.outqueue.task_done()
+
+    @coroutine
+    def response(self):
+        global SPEED
+        while True:
+            msg = yield self.inqueue.get()
+            if msg.command == COMMAND_QUIT:
+                self.stream.close()
+                return
+            else:
+                response = ("%s %s:%s\n" % (datetime.datetime.now(),
+                                            msg.sender.name,
+                                            msg.content.decode()))\
+                    .encode('utf-8')
+                try:
+                    SPEED += 1
+                    yield self.stream.write(response)
+                except Exception as e:
+                    logging.debug(str(e))
+                    self.stream.close()
+
+    @coroutine
+    def receive(self):
+        while True:
+            try:
+                line = yield self.stream.read_until(b'\n')
+            except Exception as e:
+                logging.debug(str(e))
+                msg = Message(self, '', COMMAND_QUIT, 'CONNECTION ERROR')
+                yield self.outqueue.put(msg)
+                return
+            data = line.strip().split(b' ')
+            if len(data) != 2:
+                continue
+            room_name, content = data[0], data[1]
+            if room_name in self.rooms:
+                msg = Message(self, room_name, COMMAND_NORMAL, content)
+            else:
+                msg = Message(self, room_name, COMMAND_JOIN, content)
+            yield self.outqueue.put(msg)
 
 
 class ChatServer(tornado.tcpserver.TCPServer):
@@ -86,43 +145,67 @@ class ChatServer(tornado.tcpserver.TCPServer):
         super(ChatServer, self).__init__()
         self.bind_to = bind_to
         self.rooms = {}
-        self.clients = {}
 
     @coroutine
     def handle_stream(self, stream, address):
-        client = self.clients.get(address, None)
-        if client is None:
-            client = Client(self, address, stream)
-            self.clients[address] = client
-        line = yield stream.read_until(b'\n')
-        data = line.strip().split(b' ')
-        if len(data) != 2:
-            return
-        room_name, content = data[0], data[1]
-        msg = Message(client, room_name, COMMAND_NORMAL, content)
-        room = self.get_room(room_name)
-        room.receive(msg)
+        client = Client(self, address, stream)
+        client.forwarding()
+        client.response()
+        client.receive()
 
     def get_room(self, room_name):
         if room_name in self.rooms:
             return self.rooms[room_name]
         else:
             room = Room(self, room_name)
-            room.setDaemon(True)
-            room.start()
+            room.dispatch()
             self.rooms[room_name] = room
             return room
 
-    @classmethod
-    @coroutine
-    def response(cls, msg, client):
-        response = ("%s %s:%s\n" % (datetime.datetime.now(), msg.sender.name, msg.content.decode())).encode('utf-8')
-        yield client.stream.write(response)
+
+async def handle_echo(reader, writer):
+    data = await reader.read(10)
+    message = data.decode()
+    addr = writer.get_extra_info('peername')
+    print("Received %r from %r" % (message, addr))
+
+    print("Send: %r" % message)
+    writer.write(data)
+    await writer.drain()
+
+    print("Close the client socket")
+    writer.close()
+
 
 if __name__ == '__main__':
-    srv = ChatServer('localhost:12345')
-    srv.bind(12345)
-    srv.start()
-    tornado.ioloop.IOLoop.instance().start()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--debug', action='store_true')
+    Args = parser.parse_args()
+    logger = logging.getLogger()
+    if Args.debug:
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.INFO)
+    # srv = ChatServer('localhost:12345')
+    # srv.bind(12345)
+    # srv.start()
+    # pc = PeriodicCallback(show_speed, 1000)
+    # pc.start()
+    # IOLoop.instance().start()
 
+    loop = asyncio.get_event_loop()
+    coro = asyncio.start_server(handle_echo, '127.0.0.1', 12345, loop=loop)
+    server = loop.run_until_complete(coro)
+
+    # Serve requests until Ctrl+C is pressed
+    print('Serving on {}'.format(server.sockets[0].getsockname()))
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt:
+        pass
+
+    # Close the server
+    server.close()
+    loop.run_until_complete(server.wait_closed())
+    loop.close()
 

@@ -7,9 +7,12 @@ import (
     "fmt"
     "strings"
     "github.com/op/go-logging"
+    "sync/atomic"
 )
 
 var log = logging.MustGetLogger("chatroom")
+var QueueSize int = 10
+var Speed int64 = 0
 
 // ---------- MESSAGE --------------
 
@@ -91,6 +94,14 @@ func (server *ChatServer) ListenAndServe() {
     }
     defer listener.Close()
 
+    go func() {
+        ticker := time.NewTicker(time.Second)
+        for _ = range ticker.C {
+            fmt.Println("speed", atomic.LoadInt64(&Speed))
+            atomic.StoreInt64(&Speed, 0)
+        }
+    }()
+
     for {
         conn, err := listener.Accept()
         if err != nil {
@@ -106,8 +117,8 @@ func (server *ChatServer) ListenAndServe() {
             Conn: conn,
             lock: new(sync.RWMutex),
             Rooms: make(map[string]*Room),
-            In:     make(chan *Message, 100),
-            Out:    make(chan *Message, 100),
+            In:     make(chan *Message, QueueSize),
+            Out:    make(chan *Message, QueueSize),
             Quit:   make(chan struct {}),
         }
         go client.Forwarding()
@@ -130,7 +141,7 @@ func (server *ChatServer) GetRoom(name string) *Room {
             Name: name,
             lock: new(sync.RWMutex),
             Clients: make(map[string]*Client),
-            In: make(chan *Message, 100),
+            In: make(chan *Message, QueueSize),
         }
         go room.Dispatcher()
         server.Rooms[name] = room
@@ -202,7 +213,7 @@ func (client *Client) Response() {
             if isClosed {
                 continue
             }
-
+            atomic.AddInt64(&Speed, 1)
             _, err := buf.Write([]byte(fmt.Sprintf(
                 "%s %s:%s\n",
                 msg.Time.Format(time.RFC3339),
@@ -229,9 +240,9 @@ func (client *Client) Response() {
                 buf.Flush()
             }
             client.Conn.Close()
-            close(client.Out)
-            close(client.In)
-            close(client.Quit)
+//            close(client.Out)
+//            close(client.In)
+//            close(client.Quit)
             client = nil
             return  // end loop
         }

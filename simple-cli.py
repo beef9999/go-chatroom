@@ -7,6 +7,7 @@ import threading
 
 def recv():
     while 1:
+        time.sleep(1)
         print s.recv(1024)
 
 th = threading.Thread(target=recv)
