@@ -3,11 +3,13 @@ import tornado
 import tornado.tcpserver
 from tornado.ioloop import IOLoop, PeriodicCallback
 import argparse
-from tornado.gen import coroutine
-from tornado.queues import Queue
+#from tornado.gen import coroutine
+#from tornado.queues import Queue
 import datetime
 import threading
 import logging
+import asyncio
+from asyncio import Queue
 
 
 COMMAND_NORMAL = 1
@@ -24,10 +26,12 @@ Args = None
 SPEED = 0
 
 
-def show_speed():
+async def show_speed():
     global SPEED
-    logging.info(SPEED)
-    SPEED = 0
+    while True:
+        logging.info(SPEED)
+        SPEED = 0
+        await asyncio.sleep(1)
 
 
 class Message(object):
@@ -49,11 +53,10 @@ class Room(object):
         self.lock = threading.RLock()
         self.inqueue = Queue(maxsize=QUEUE_SIZE)
 
-    @coroutine
-    def dispatch(self):
+    async def dispatch(self):
         logging.debug('Chatroom: %s opened' % self.name)
         while True:
-            msg = yield self.inqueue.get()
+            msg = await self.inqueue.get()
             logging.debug("Room got message: room[%s], command[%s], content[%s]",
                           msg.receiver, msg.command, msg.content)
             if msg.command == COMMAND_JOIN:
@@ -61,12 +64,12 @@ class Room(object):
                 self.clients[msg.sender.name] = msg.sender
             elif msg.command == COMMAND_QUIT:
                 del self.clients[msg.sender.name]
-            yield self.broadcast(msg)
+            await self.broadcast(msg)
+            self.inqueue.task_done()
 
-    @coroutine
-    def broadcast(self, msg):
+    async def broadcast(self, msg):
         for _, client in self.clients.items():
-            yield client.inqueue.put(msg)
+            await client.inqueue.put(msg)
 
 
 class Client(object):
@@ -79,30 +82,29 @@ class Client(object):
         self.inqueue = Queue(maxsize=QUEUE_SIZE)
         self.outqueue = Queue(maxsize=QUEUE_SIZE)
 
-    @coroutine
-    def forwarding(self):
+    async def forwarding(self):
         while True:
-            msg = yield self.outqueue.get()
+            msg = await self.outqueue.get()
             if msg.command == COMMAND_QUIT:
                 for _, room in self.rooms.items():
-                    yield room.inqueue.put(msg)
+                    await room.inqueue.put(msg)
             elif msg.command == COMMAND_JOIN:
                 room_name = msg.receiver
                 room = self.server.get_room(room_name)
                 self.rooms[room_name] = room
-                yield room.inqueue.put(msg)
+                await room.inqueue.put(msg)
             else:
                 room = self.rooms[msg.receiver]
-                yield room.inqueue.put(msg)
+                await room.inqueue.put(msg)
             self.outqueue.task_done()
 
-    @coroutine
-    def response(self):
+    async def response(self):
         global SPEED
         while True:
-            msg = yield self.inqueue.get()
+            msg = await self.inqueue.get()
+            self.inqueue.task_done()
             if msg.command == COMMAND_QUIT:
-                self.stream.close()
+                self.stream.writer.close()
                 return
             else:
                 response = ("%s %s:%s\n" % (datetime.datetime.now(),
@@ -111,20 +113,20 @@ class Client(object):
                     .encode('utf-8')
                 try:
                     SPEED += 1
-                    yield self.stream.write(response)
+                    self.stream.writer.write(response)
+                    await self.stream.writer.drain()
                 except Exception as e:
                     logging.debug(str(e))
-                    self.stream.close()
+                    self.stream.writer.close()
 
-    @coroutine
-    def receive(self):
+    async def receive(self):
         while True:
             try:
-                line = yield self.stream.read_until(b'\n')
+                line = await self.stream.reader.readline()
             except Exception as e:
                 logging.debug(str(e))
                 msg = Message(self, '', COMMAND_QUIT, 'CONNECTION ERROR')
-                yield self.outqueue.put(msg)
+                await self.outqueue.put(msg)
                 return
             data = line.strip().split(b' ')
             if len(data) != 2:
@@ -134,31 +136,54 @@ class Client(object):
                 msg = Message(self, room_name, COMMAND_NORMAL, content)
             else:
                 msg = Message(self, room_name, COMMAND_JOIN, content)
-            yield self.outqueue.put(msg)
+            await self.outqueue.put(msg)
 
 
-class ChatServer(tornado.tcpserver.TCPServer):
+class Stream(object):
 
-    def __init__(self, bind_to):
+    def __init__(self, reader, writer):
+        self.reader = reader
+        self.writer = writer
+
+
+class ChatServer(object):
+
+    def __init__(self, host, port):
         super(ChatServer, self).__init__()
-        self.bind_to = bind_to
+        self.host = host
+        self.port = port
         self.rooms = {}
+        self._server = None
 
-    @coroutine
-    def handle_stream(self, stream, address):
+    async def handle_stream(self, reader, writer):
+        address = writer.get_extra_info('peername')
+        stream = Stream(reader, writer)
         client = Client(self, address, stream)
-        client.forwarding()
-        client.response()
-        client.receive()
+        asyncio.ensure_future(client.forwarding())
+        asyncio.ensure_future(client.response())
+        asyncio.ensure_future(client.receive())
 
     def get_room(self, room_name):
         if room_name in self.rooms:
             return self.rooms[room_name]
         else:
             room = Room(self, room_name)
-            room.dispatch()
+            asyncio.ensure_future(room.dispatch())
             self.rooms[room_name] = room
             return room
+
+    def run(self):
+        loop = asyncio.get_event_loop()
+        coro = asyncio.start_server(self.handle_stream, self.host, self.port, loop=loop)
+        self._server = loop.run_until_complete(coro)
+        asyncio.ensure_future(show_speed())
+        loop.run_forever()
+
+    def stop(self):
+        loop = asyncio.get_event_loop()
+        self._server.close()
+        loop.run_until_complete(self._server.wait_closed())
+        loop.close()
 
 
 if __name__ == '__main__':
@@ -170,9 +195,12 @@ if __name__ == '__main__':
         logger.setLevel(logging.DEBUG)
     else:
         logger.setLevel(logging.INFO)
-    srv = ChatServer('localhost:12345')
-    srv.bind(12345)
-    srv.start()
-    pc = PeriodicCallback(show_speed, 1000)
-    pc.start()
-    IOLoop.instance().start()
+
+    srv = ChatServer('localhost', 12345)
+
+    try:
+        srv.run()
+    except KeyboardInterrupt:
+        pass
+
+    srv.stop()

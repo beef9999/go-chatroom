@@ -11,7 +11,7 @@ import (
 )
 
 var log = logging.MustGetLogger("chatroom")
-var QueueSize int = 10
+var QueueSize int = 100
 var Speed int64 = 0
 
 // ---------- MESSAGE --------------
