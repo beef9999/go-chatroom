@@ -4,9 +4,11 @@ import (
     "chatroom"
     "github.com/op/go-logging"
     "flag"
+    "runtime"
 )
 
 func main() {
+    runtime.GOMAXPROCS(0)
     debug := flag.Bool("debug", false, "Show debug info")
     flag.Parse()
     if *debug {

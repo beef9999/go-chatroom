@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import time
 import datetime
 import threading
 import logging
@@ -21,12 +22,20 @@ Args = None
 SPEED = 0
 
 
-async def show_speed():
+async def show_speed_coroutine():
     global SPEED
     while True:
         logging.info(SPEED)
         SPEED = 0
         await asyncio.sleep(1)
+
+
+def show_speed_threading():
+    global SPEED
+    while True:
+        logging.info(SPEED)
+        SPEED = 0
+        time.sleep(1)
 
 
 class Message(object):
@@ -171,7 +180,8 @@ class ChatServer(object):
         loop = asyncio.get_event_loop()
         coro = asyncio.start_server(self.handle_stream, self.host, self.port, loop=loop)
         self._server = loop.run_until_complete(coro)
-        asyncio.ensure_future(show_speed())
+        #asyncio.ensure_future(async_show_speed())
+        threading.Thread(target=show_speed_threading).start()
         loop.run_forever()
 
     def stop(self):
