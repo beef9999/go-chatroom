@@ -240,9 +240,9 @@ func (client *Client) Response() {
                 buf.Flush()
             }
             client.Conn.Close()
-//            close(client.Out)
-//            close(client.In)
-//            close(client.Quit)
+            close(client.Out)
+            close(client.In)
+            close(client.Quit)
             client = nil
             return  // end loop
         }

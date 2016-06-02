@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-    runtime.GOMAXPROCS(0)
+    runtime.GOMAXPROCS(1)
     debug := flag.Bool("debug", false, "Show debug info")
     flag.Parse()
     if *debug {

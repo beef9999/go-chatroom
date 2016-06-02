@@ -15,13 +15,13 @@ import (
 )
 
 func init() {
-    runtime.GOMAXPROCS(runtime.NumCPU())
+    runtime.GOMAXPROCS(0)
 }
 
 var (
     numClients int64 = 1000
-    numRooms int64 = numClients / 20
-    msgInterval int64 = 50    // millisecond
+    numRooms int64 = 50
+    msgInterval int64 = 20    // millisecond
 
     idxClients int64 = 1
     speed int64 = 0
@@ -47,9 +47,6 @@ func work(ch chan struct {}) {
 
     for {
         atomic.AddInt64(&speed, 1)
-//        time.Sleep(200 * time.Millisecond)
-//        room := strconv.Itoa(((idx-1)/100+1)*10 - 9 + rand.Int()&10)
-//        msg := room + " " + strconv.Itoa(rand.Int()) + "\n"
         time.Sleep(time.Duration(msgInterval) * time.Millisecond)
         room := strconv.FormatInt(rand.Int63() % (numClients / numRooms), 10)
         content := strconv.Itoa(rand.Int())

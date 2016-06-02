@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python2
 import tornado
 import tornado.tcpserver
 from tornado.ioloop import IOLoop, PeriodicCallback
@@ -8,6 +8,7 @@ from tornado.queues import Queue
 import datetime
 import threading
 import logging
+import time
 
 
 COMMAND_NORMAL = 1
@@ -17,17 +18,19 @@ COMMAND_DISMISS = 4
 COMMAND_PAUSE = 5
 COMMAND_KICK = 6
 
-QUEUE_SIZE = 1000
+QUEUE_SIZE = 100
 
 Args = None
 
 SPEED = 0
 
 
-def show_speed():
+def show_speed_threading():
     global SPEED
-    logging.info(SPEED)
-    SPEED = 0
+    while True:
+        logging.info(SPEED)
+        SPEED = 0
+        time.sleep(1)
 
 
 class Message(object):
@@ -170,9 +173,10 @@ if __name__ == '__main__':
         logger.setLevel(logging.DEBUG)
     else:
         logger.setLevel(logging.INFO)
+    t = threading.Thread(target=show_speed_threading)
+    t.setDaemon(True)
+    t.start()
     srv = ChatServer('localhost:12345')
     srv.bind(12345)
     srv.start()
-    pc = PeriodicCallback(show_speed, 1000)
-    pc.start()
     IOLoop.instance().start()

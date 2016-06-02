@@ -15,7 +15,7 @@ COMMAND_DISMISS = 4
 COMMAND_PAUSE = 5
 COMMAND_KICK = 6
 
-QUEUE_SIZE = 1000
+QUEUE_SIZE = 100
 
 Args = None
 
@@ -181,7 +181,9 @@ class ChatServer(object):
         coro = asyncio.start_server(self.handle_stream, self.host, self.port, loop=loop)
         self._server = loop.run_until_complete(coro)
         #asyncio.ensure_future(async_show_speed())
-        threading.Thread(target=show_speed_threading).start()
+        t = threading.Thread(target=show_speed_threading)
+        t.setDaemon(True)
+        t.start()
         loop.run_forever()
 
     def stop(self):
