@@ -21,7 +21,7 @@ func init() {
 var (
     numClients int64 = 1000
     numRooms int64 = 50
-    msgInterval int64 = 20    // millisecond
+    msgInterval int64 = 10    // millisecond
 
     idxClients int64 = 1
     speed int64 = 0
